@@ -1,0 +1,23 @@
+# PipelineDoctor AI - Python 3.11+ (tested layout from VideoFit AI)
+python-dotenv
+pydantic>=2.7
+
+# database + queue clients
+psycopg2-binary
+redis
+pandas
+sqlalchemy
+
+# agents + LLM (used from Step 6)
+langchain-groq
+langchain-google-genai   # optional Gemini fallback when Groq is rate limited
+langgraph
+
+# incident memory (used from Step 9)
+pgvector
+sentence-transformers
+
+# background jobs + API (used from Step 10)
+celery
+fastapi
+uvicorn

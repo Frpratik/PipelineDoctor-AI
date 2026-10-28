@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PipelineDoctor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">pipeline<b>doctor</b></div>
+    <div class="target" id="target">connecting...</div>
+    <div class="scan" id="scan"><span class="dot"></span><span id="scan-text">waiting for first scan</span></div>
+    <form class="controls" id="run-form">
+      <input id="fault" list="faults" placeholder="fault (empty = clean run)" autocomplete="off" spellcheck="false">
+      <datalist id="faults">
+        <option value="renamed_column"><option value="null_spike"><option value="duplicate_rows"><option value="row_count_drop">
+        <option value="currency_unit"><option value="timezone_shift"><option value="join_fanout"><option value="late_partial">
+      </datalist>
+      <button type="submit" id="run-btn">Run next day</button>
+    </form>
+  </header>
+  <div class="sweep" id="sweep"></div>
+
+  <main>
+    <aside>
+      <section>
+        <h2>Watched tables <span class="hint">row counts</span></h2>
+        <table id="tables"></table>
+      </section>
+      <section class="grow">
+        <h2>Event log <span class="hint">changes seen between scans</span></h2>
+        <div id="events" class="log"></div>
+      </section>
+    </aside>
+
+    <div class="center">
+      <section>
+        <h2>Pipeline runs <span class="hint">one cell per check: green passed, red failed, hollow not run</span></h2>
+        <table id="runs"></table>
+      </section>
+      <section>
+        <h2>Incidents</h2>
+        <table id="incidents"></table>
+      </section>
+      <section>
+        <h2>Jobs <span class="hint">background tasks</span></h2>
+        <table id="jobs"></table>
+      </section>
+    </div>
+  </main>
+
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-bar"><span id="drawer-title"></span><button id="drawer-close" type="button">Close</button></div>
+    <div id="drawer-body"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
