@@ -1,6 +1,11 @@
 -- Core tables. Re-running this file resets them (DROP first), so setup is repeatable.
 -- Later steps append their own tables to this file.
 DROP TABLE IF EXISTS agent_steps CASCADE;
+DROP TABLE IF EXISTS watch_alerts CASCADE;
+DROP TABLE IF EXISTS watch_check_results CASCADE;
+DROP TABLE IF EXISTS table_profiles CASCADE;
+DROP TABLE IF EXISTS watched_tables CASCADE;
+DROP TABLE IF EXISTS connections CASCADE;
 DROP TABLE IF EXISTS eval_results CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;
 DROP TABLE IF EXISTS incident_memory CASCADE;
@@ -135,6 +140,67 @@ CREATE TABLE eval_results (
     seconds            NUMERIC(8, 1),
     error              TEXT,
     created_at         TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- ---- Watching a customer's own database (no LLM involved in any of this) ----
+
+-- A database the user connected. The password is stored encrypted (app/vault.py).
+CREATE TABLE connections (
+    connection_id       SERIAL PRIMARY KEY,
+    name                TEXT NOT NULL,
+    host                TEXT NOT NULL,
+    port                INT NOT NULL,
+    database            TEXT NOT NULL,
+    username            TEXT NOT NULL,
+    password_encrypted  TEXT NOT NULL,
+    read_only           BOOLEAN NOT NULL,     -- result of the privilege check at connect time
+    warnings            JSONB NOT NULL,
+    created_at          TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- A table the user chose to watch, with the columns they confirmed.
+CREATE TABLE watched_tables (
+    watch_id         SERIAL PRIMARY KEY,
+    connection_id    INT NOT NULL REFERENCES connections(connection_id) ON DELETE CASCADE,
+    schema_name      TEXT NOT NULL,
+    table_name       TEXT NOT NULL,
+    time_column      TEXT NOT NULL,           -- says when a row was added; days are built from it
+    key_column       TEXT,                    -- used to find duplicates
+    excluded_columns TEXT[] NOT NULL DEFAULT '{}',   -- never read (personal data)
+    columns          JSONB NOT NULL,          -- columns at watch time, to notice schema changes
+    created_at       TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (connection_id, schema_name, table_name)
+);
+
+-- What each day looked like: row count, null rates, averages ... (the "normal" we compare against).
+CREATE TABLE table_profiles (
+    profile_id  SERIAL PRIMARY KEY,
+    watch_id    INT NOT NULL REFERENCES watched_tables(watch_id) ON DELETE CASCADE,
+    day         DATE NOT NULL,
+    metrics     JSONB NOT NULL,
+    profiled_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (watch_id, day)
+);
+
+CREATE TABLE watch_check_results (
+    result_id   SERIAL PRIMARY KEY,
+    watch_id    INT NOT NULL REFERENCES watched_tables(watch_id) ON DELETE CASCADE,
+    day         DATE NOT NULL,
+    check_name  TEXT NOT NULL,
+    passed      BOOLEAN NOT NULL,
+    details     TEXT NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- Opened when a watched table fails a check for a day (the watching version of an incident).
+CREATE TABLE watch_alerts (
+    alert_id    SERIAL PRIMARY KEY,
+    watch_id    INT NOT NULL REFERENCES watched_tables(watch_id) ON DELETE CASCADE,
+    day         DATE NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open',
+    summary     TEXT NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (watch_id, day)
 );
 
 -- Every step any agent takes while working on an incident (the "flight recorder").

@@ -4,6 +4,7 @@ pydantic>=2.7
 
 # database + queue clients
 psycopg2-binary
+cryptography
 redis
 pandas
 sqlalchemy

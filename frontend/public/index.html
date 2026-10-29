@@ -9,6 +9,10 @@
 <body>
   <header>
     <div class="brand">pipeline<b>doctor</b></div>
+    <nav class="tabs">
+      <button type="button" data-view="pipeline" class="on">Pipeline</button>
+      <button type="button" data-view="sources">Data sources</button>
+    </nav>
     <div class="target" id="target">connecting...</div>
     <div class="scan" id="scan"><span class="dot"></span><span id="scan-text">waiting for first scan</span></div>
     <form class="controls" id="run-form">
@@ -22,7 +26,38 @@
   </header>
   <div class="sweep" id="sweep"></div>
 
-  <main>
+  <main id="view-sources" class="sources" hidden>
+    <section>
+      <h2>Connect a database <span class="hint">PipelineDoctor only reads. Use a user that can only SELECT.</span></h2>
+      <form id="connect-form" class="grid-form">
+        <label>Name<input name="name" placeholder="shop database" required></label>
+        <label>Host<input name="host" placeholder="postgres" required></label>
+        <label>Port<input name="port" value="5432" required></label>
+        <label>Database<input name="database" required></label>
+        <label>User<input name="user" required></label>
+        <label>Password<input name="password" type="password" required autocomplete="off"></label>
+        <div class="form-actions">
+          <button type="submit" class="primary" id="connect-btn">Connect and check</button>
+          <button type="button" id="demo-fill">Fill in the demo database</button>
+        </div>
+      </form>
+      <div id="src-message" class="notice" hidden></div>
+    </section>
+    <section>
+      <h2>Connections</h2>
+      <table id="connections"></table>
+    </section>
+    <section id="scan-section" hidden>
+      <h2 id="scan-title">Tables <span class="hint">best candidates first: tables that keep receiving new rows</span></h2>
+      <table id="scan-table"></table>
+    </section>
+    <section>
+      <h2>Watched tables <span class="hint">checked against their own normal, from the table's history</span></h2>
+      <table id="watched"></table>
+    </section>
+  </main>
+
+  <main id="view-pipeline">
     <aside>
       <section>
         <h2>Watched tables <span class="hint">row counts</span></h2>
@@ -56,5 +91,6 @@
   </div>
 
   <script src="app.js"></script>
+  <script src="sources.js"></script>
 </body>
 </html>

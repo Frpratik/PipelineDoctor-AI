@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app import config, jobs
 from app.agents.investigator import PROMPTS
+from app.api.watch import router as watch_router
 from app.db import query_df
 from app.evals import DEFAULT_FAULTS, format_report
 from app.faults import FAULTS
@@ -20,6 +21,7 @@ from app.fixes import reject_fix
 from app.trace import get_trace
 
 app = FastAPI(title="PipelineDoctor AI")
+app.include_router(watch_router)   # connect a database, scan it, choose tables to watch
 
 
 class PipelineRunRequest(BaseModel):

@@ -131,7 +131,39 @@ details summary:hover { color: var(--text); }
 .step .who.verifier { color: var(--warn); } .step .who.fixer, .step .who.dry_run { color: var(--ok); } .step .who.user { color: var(--text); }
 .actions { display: flex; gap: 8px; margin-top: 10px; }
 
+/* ---------- data sources view ---------- */
+.tabs { display: flex; gap: 2px; }
+.tabs button { border: 0; background: none; color: var(--dim); padding: 6px 12px; border-radius: 3px; }
+.tabs button:hover { color: var(--text); }
+.tabs button.on { color: var(--text); background: var(--raised); }
+body[data-view="sources"] .controls { display: none; }
+
+main.sources { display: block; background: var(--bg); max-width: 1100px; min-height: auto; }
+main.sources[hidden], #view-pipeline[hidden] { display: none; }
+.grid-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; padding: 4px 16px 14px; }
+.grid-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
+.grid-form input, .editor select {
+  padding: 6px 9px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+}
+.grid-form input:focus, .editor select:focus { outline: none; border-color: var(--info); }
+.form-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
+.notice { margin: 0 16px 14px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; }
+.notice.ok { border-color: #2a5a3d; color: var(--ok); }
+.notice.warn { border-color: #66501f; color: var(--warn); }
+.notice.bad { border-color: #6b3128; color: var(--bad); }
+.notice p { margin: 2px 0; }
+tr.editor-row td { background: var(--panel); white-space: normal; }
+.editor { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; padding: 6px 0; font-family: var(--sans); }
+.editor label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
+.editor .excl { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--dim); }
+.editor .excl label { flex-direction: row; align-items: center; gap: 5px; font-family: var(--mono); font-size: 12px; }
+.bars { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin-top: 6px; }
+.bars i { flex: 1; background: var(--faint); min-height: 1px; }
+.bars i.last { background: var(--info); }
+
 @media (max-width: 900px) {
+  .grid-form { grid-template-columns: 1fr; }
   main { grid-template-columns: 1fr; }
   header { flex-wrap: wrap; height: auto; padding: 8px 16px; gap: 8px 16px; }
   .scan { margin-left: 0; }

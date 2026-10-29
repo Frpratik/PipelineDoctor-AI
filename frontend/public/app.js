@@ -23,7 +23,7 @@ const state = {
 const TAG = {   // status -> colour
   open: "warn", investigating: "info", verified: "ok", unverified: "warn", fix_proposed: "warn", fix_applied: "warn",
   resolved: "ok", fix_rejected: "bad", success: "ok", failed: "bad", running: "info", queued: "", done: "ok",
-  pending: "warn", applied: "ok", approved: "ok", rejected: "bad",
+  pending: "warn", applied: "ok", approved: "ok", rejected: "bad", alert: "bad", ok: "ok", "not checked": "",
 };
 const tag = (status) => `<span class="tag ${TAG[status] ?? ""}">${esc(status)}</span>`;
 

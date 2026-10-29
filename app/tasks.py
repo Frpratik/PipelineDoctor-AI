@@ -2,7 +2,7 @@
 
 import groq
 
-from app import jobs, trace
+from app import jobs, trace, watch
 from app.agents.fixer import fix_incident
 from app.agents.team import diagnose_incident
 from app.celery_app import celery_app
@@ -93,6 +93,18 @@ def apply_fix_task(self, job_id: int, fix_id: int):
         if not result["applied"]:
             return result["message"]
         return f"fix {fix_id} applied to {result['rows_affected']} rows; incident is now '{result['incident_status']}'"
+
+    run_job(self, job_id, work)
+
+
+@celery_app.task(bind=True)
+def run_watch_task(self, job_id: int, watch_id: int):
+    """Profile a watched table's recent days and check the latest one. No LLM involved."""
+    def work():
+        table = watch.get_watch(watch_id)["table_name"]
+        jobs.set_progress(job_id, f"Reading daily numbers from {table}")
+        result = watch.run_watch(watch_id)
+        return f"{table} {result['day']}: {result['status']}, {result['message']}"
 
     run_job(self, job_id, work)
 
