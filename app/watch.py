@@ -5,6 +5,7 @@ No LLM anywhere in this file. The flow is: add_watch -> run_watch (profile the h
 
 import json
 import statistics
+from datetime import timedelta
 
 from app import targets, vault
 from app.db import get_conn, query_df
@@ -182,9 +183,11 @@ def _tolerance(minimum: float, values) -> float:
     return max(minimum, VARIATION_FACTOR * _variation(values))
 
 
-def generic_checks(watch: dict, today: dict, history: list, current_columns: list, basis: str = "recent days") -> list:
+def generic_checks(watch: dict, today: dict, history: list, current_columns: list, basis: str = "recent days",
+                   event: dict = None) -> list:
     """Compare the checked day (`today`) with `history`, the earlier days chosen as its baseline (`basis` names them,
-    e.g. "Saturdays"). Pure function: no database access."""
+    e.g. "Saturdays"). If `event` is given (a sale, a festival) the day is expected to differ by the event's factors.
+    Pure function: no database access."""
     results = []
 
     def add(name, passed, details):
@@ -201,10 +204,17 @@ def generic_checks(watch: dict, today: dict, history: list, current_columns: lis
         add("row_count_change", False, f"no rows at all for the day (usual about {usual:.0f} on {basis})")
         return results
     if usual:
-        tolerance = _tolerance(ROW_COUNT_TOLERANCE, counts)
-        change = (today["row_count"] - usual) / usual
-        add("row_count_change", abs(change) <= tolerance,
-            f"{today['row_count']} rows, usual about {usual:.0f} on {basis} ({change:+.0%}, allowed +/-{tolerance:.0%})")
+        if event and event["row_factor"] is None:   # the user said any change in volume is fine during this event
+            add("row_count_change", True, f"{today['row_count']} rows, usual about {usual:.0f} on {basis}. "
+                f"Any change is expected: {event['name']}")
+        else:
+            factor = float(event["row_factor"]) if event else 1.0
+            expected = usual * factor
+            tolerance = _tolerance(ROW_COUNT_TOLERANCE, counts)
+            change = (today["row_count"] - expected) / expected
+            about = f", expected x{factor:g} for {event['name']}" if event else ""
+            add("row_count_change", abs(change) <= tolerance,
+                f"{today['row_count']} rows, usual about {usual:.0f} on {basis}{about} ({change:+.0%}, allowed +/-{tolerance:.0%})")
 
     problems = []
     for column, now in today["columns"].items():
@@ -221,13 +231,18 @@ def generic_checks(watch: dict, today: dict, history: list, current_columns: lis
         base = [h["columns"][column]["mean"] for h in history if h["columns"].get(column, {}).get("mean") is not None]
         if not base or not _median(base):
             continue
-        ratio = now["mean"] / _median(base)
+        notes.append(column)
+        if event and event["value_factor"] is None:
+            continue   # any change in the averages is fine during this event
+        factor = float(event["value_factor"]) if event else 1.0
+        ratio = now["mean"] / (_median(base) * factor)
         tolerance = _tolerance(VALUE_TOLERANCE, base)
         if abs(ratio - 1) > tolerance:
-            problems.append(f"{column} average {now['mean']:.4g} (usual {_median(base):.4g}, x{ratio:.2f}, allowed +/-{tolerance:.0%})")
-        notes.append(column)
+            problems.append(f"{column} average {now['mean']:.4g} (usual {_median(base):.4g}"
+                            f"{f', expected x{factor:g}' if factor != 1 else ''}, x{ratio:.2f} of expected, allowed +/-{tolerance:.0%})")
     add("value_distribution", not problems,
-        "; ".join(problems) + f" (compared with {basis})" if problems else f"averages normal for {', '.join(notes) or 'no numeric columns'}")
+        "; ".join(problems) + f" (compared with {basis})" if problems else
+        f"averages normal for {', '.join(notes) or 'no numeric columns'}" + (f" ({event['name']})" if event else ""))
 
     if watch["key_column"] and today["dup_rate"] is not None:
         add("duplicate_keys", today["dup_rate"] <= DUPLICATE_RATE,
@@ -257,6 +272,54 @@ def _current_columns(watch: dict) -> list:
         conn.close()
 
 
+def _days_between(start, end):
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def get_events(watch_id: int) -> list:
+    """Events that apply to this table: its own first, then the ones for every table."""
+    rows = query_df("SELECT * FROM watch_events WHERE watch_id = %s OR watch_id IS NULL ORDER BY (watch_id IS NULL), event_id", (watch_id,))
+    clean = lambda v: None if v is None or (isinstance(v, float) and v != v) else v   # pandas NaN -> None
+    return [{k: clean(v) for k, v in row.items()} for row in rows.to_dict("records")]
+
+
+def add_event(name, start_day, end_day, row_factor=None, value_factor=None, watch_id=None) -> int:
+    """Save an event. A factor of None means "any change is fine"; watch_id None means every watched table."""
+    if end_day < start_day:
+        raise ValueError("the event cannot end before it starts")
+    if not name.strip():
+        raise ValueError("give the event a name")
+    for factor in (row_factor, value_factor):
+        if factor is not None and factor <= 0:
+            raise ValueError("expected factors must be greater than 0")
+    db = get_conn()
+    cur = db.cursor()
+    cur.execute("INSERT INTO watch_events (watch_id, name, start_day, end_day, row_factor, value_factor) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING event_id",
+                (watch_id, name.strip(), start_day, end_day, row_factor, value_factor))
+    event_id = cur.fetchone()[0]
+    db.commit()
+    db.close()
+    return event_id
+
+
+def decide_alert(alert_id: int, verdict: str) -> dict:
+    """A human's answer to an alert: "real" (confirm the problem) or "normal" (it was fine; the day joins the baseline)."""
+    if verdict not in ("real", "normal"):
+        raise ValueError("verdict must be 'real' or 'normal'")
+    status = "confirmed" if verdict == "real" else "dismissed"
+    db = get_conn()
+    cur = db.cursor()
+    cur.execute("UPDATE watch_alerts SET status = %s, decided_at = now() WHERE alert_id = %s RETURNING watch_id, day",
+                (status, alert_id))
+    found = cur.fetchone()
+    db.commit()
+    db.close()
+    if not found:
+        raise ValueError(f"alert {alert_id} not found")
+    return {"alert_id": alert_id, "status": status, "watch_id": found[0], "day": str(found[1])}
+
+
 def choose_baseline(history: list, target_day) -> tuple:
     """Which earlier days is the target day compared with? The same weekday in earlier weeks, if we have enough of them.
     Many tables have a weekly rhythm (busy weekends, quiet Mondays): comparing a Saturday with all days would
@@ -275,16 +338,24 @@ def run_watch(watch_id: int, day=None) -> dict:
     profiles = query_df("SELECT day, metrics FROM table_profiles WHERE watch_id = %s ORDER BY day", (watch_id,))
     failed_days = set(query_df("SELECT DISTINCT day FROM watch_check_results WHERE watch_id = %s AND NOT passed", (watch_id,))["day"])
 
+    # A day a human marked "normal" is not a bad day: it stays in the baseline, which is how the system learns.
+    dismissed = set(query_df("SELECT day FROM watch_alerts WHERE watch_id = %s AND status = 'dismissed'", (watch_id,))["day"])
+    events = get_events(watch_id)
+    event_days = {d for e in events for d in _days_between(e["start_day"], e["end_day"])}
+    event = next((e for e in events if e["start_day"] <= target <= e["end_day"]), None)   # a table's own event comes first
+
     by_day = dict(zip(profiles["day"], profiles["metrics"]))
     today = by_day.get(target)
-    # Healthy days before the checked day, so a bad day never becomes "normal".
-    healthy = [{**m, "day": d} for d, m in by_day.items() if d < target and d not in failed_days]
+    # Healthy days before the checked day. A bad day never becomes "normal", and neither does an event day (a sale
+    # is not a normal Saturday, so it must not distort what a normal Saturday looks like).
+    healthy = [{**m, "day": d} for d, m in by_day.items()
+               if d < target and (d not in failed_days or d in dismissed) and d not in event_days]
     if len(healthy) < MIN_BASELINE_DAYS:
         return {"day": str(target), "status": "learning", "results": [], "alert_id": None, "basis": None,
                 "message": f"learning: {len(healthy)} of {MIN_BASELINE_DAYS} healthy days needed before checking"}
     history, basis = choose_baseline(healthy, target)
 
-    results = generic_checks(watch, today, history, _current_columns(watch), basis)
+    results = generic_checks(watch, today, history, _current_columns(watch), basis, event)
     failed = [r["check_name"] for r in results if not r["passed"]]
 
     db = get_conn()
@@ -300,9 +371,11 @@ def run_watch(watch_id: int, day=None) -> dict:
                     "ON CONFLICT (watch_id, day) DO UPDATE SET summary = EXCLUDED.summary RETURNING alert_id",
                     (watch_id, target, summary))
         alert_id = cur.fetchone()[0]
-    else:   # the day is fine now (for example after fixing the data), so close any old alert for it
+    else:   # the day is fine now (data fixed, or an event now explains it), so remove any old alert for it
         cur.execute("DELETE FROM watch_alerts WHERE watch_id = %s AND day = %s", (watch_id, target))
     db.commit()
     db.close()
+    note = f" ({event['name']})" if event else ""
     return {"day": str(target), "status": "alert" if failed else "ok", "results": results, "alert_id": alert_id,
-            "basis": basis, "message": f"{len(failed)} check(s) failed" if failed else "all checks passed"}
+            "basis": basis, "baseline_days": len(history), "event": event["name"] if event else None,
+            "message": f"{len(failed)} check(s) failed{note}" if failed else f"all checks passed{note}"}

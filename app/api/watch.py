@@ -4,6 +4,7 @@ Passwords go in but never come out: responses contain no secrets.
 """
 
 import json
+from datetime import date
 from typing import Optional
 
 import psycopg2
@@ -11,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app import jobs, watch
-from app.db import query_df
+from app.db import get_conn, query_df
 from app.tasks import run_watch_task
 
 router = APIRouter()
@@ -109,13 +110,68 @@ def watch_detail(watch_id: int):
         "checks": rows("SELECT day, check_name, passed, details FROM watch_check_results WHERE watch_id = %s "
                        "AND day = (SELECT MAX(day) FROM watch_check_results WHERE watch_id = %s) ORDER BY result_id", (watch_id, watch_id)),
         "alerts": rows("SELECT alert_id, day, status, summary FROM watch_alerts WHERE watch_id = %s ORDER BY day DESC", (watch_id,)),
+        "events": rows("SELECT event_id, watch_id, name, start_day, end_day, row_factor, value_factor FROM watch_events "
+                       "WHERE watch_id = %s OR watch_id IS NULL ORDER BY start_day DESC", (watch_id,)),
     }
 
 
+class CheckRequest(BaseModel):
+    day: Optional[str] = None   # YYYY-MM-DD; default is yesterday
+
+
 @router.post("/watch/{watch_id}/check")
-def check_now(watch_id: int):
+def check_now(watch_id: int, request: CheckRequest = CheckRequest()):
     if not rows("SELECT 1 FROM watched_tables WHERE watch_id = %s", (watch_id,)):
         raise HTTPException(404, "watched table not found")
+    try:
+        day = date.fromisoformat(request.day).isoformat() if request.day else None
+    except ValueError:
+        raise HTTPException(400, "day must look like 2026-10-24")
     job_id = jobs.create_job("watch_check")
-    run_watch_task.delay(job_id, watch_id)
+    run_watch_task.delay(job_id, watch_id, day)
     return {"job_id": job_id}
+
+
+class EventRequest(BaseModel):
+    name: str
+    start_day: str
+    end_day: str
+    row_factor: Optional[float] = None     # expected rows vs normal, e.g. 3 = three times; None = any change is fine
+    value_factor: Optional[float] = None   # expected averages vs normal; None = any change is fine
+    all_tables: bool = False               # True = applies to every watched table
+
+
+@router.post("/watch/{watch_id}/events")
+def create_event(watch_id: int, request: EventRequest):
+    if not rows("SELECT 1 FROM watched_tables WHERE watch_id = %s", (watch_id,)):
+        raise HTTPException(404, "watched table not found")
+    try:
+        event_id = watch.add_event(request.name, date.fromisoformat(request.start_day), date.fromisoformat(request.end_day),
+                                   request.row_factor, request.value_factor, None if request.all_tables else watch_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"event_id": event_id}
+
+
+@router.delete("/events/{event_id}")
+def delete_event(event_id: int):
+    if not rows("SELECT 1 FROM watch_events WHERE event_id = %s", (event_id,)):
+        raise HTTPException(404, "event not found")
+    db = get_conn()
+    cur = db.cursor()
+    cur.execute("DELETE FROM watch_events WHERE event_id = %s", (event_id,))
+    db.commit()
+    db.close()
+    return {"deleted": event_id}
+
+
+class AlertDecision(BaseModel):
+    verdict: str   # "real" = confirm the problem, "normal" = it was fine (the day joins the baseline)
+
+
+@router.post("/alerts/{alert_id}/decision")
+def decide(alert_id: int, request: AlertDecision):
+    try:
+        return watch.decide_alert(alert_id, request.verdict)
+    except ValueError as e:
+        raise HTTPException(400, str(e))

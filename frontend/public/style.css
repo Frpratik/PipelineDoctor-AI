@@ -158,6 +158,11 @@ tr.editor-row td { background: var(--panel); white-space: normal; }
 .editor label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
 .editor .excl { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--dim); }
 .editor .excl label { flex-direction: row; align-items: center; gap: 5px; font-family: var(--mono); font-size: 12px; }
+.alert-row { padding: 6px 0; border-top: 1px solid var(--line); }
+.alert-row:first-child { border-top: 0; }
+.event-form { margin-top: 8px; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; }
+.event-form input { padding: 5px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 12px; width: 150px; }
+.event-form input[type="checkbox"] { width: auto; }
 .bars { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin-top: 6px; }
 .bars i { flex: 1; background: var(--faint); min-height: 1px; }
 .bars i.last { background: var(--info); }

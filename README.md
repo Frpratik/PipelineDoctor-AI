@@ -17,6 +17,7 @@ The complexity lives in the agent logic, not the infrastructure. Everything is p
 7. **Incident memory:** resolved incidents are stored with an embedding in pgvector. The Investigator recalls the 3 most similar past incidents before it starts.
 8. **Trace:** every agent step (tool calls, LLM calls, tokens, timings) is stored, so you can see exactly how a diagnosis was reached.
 9. **Evals:** each fault is run end to end and a fixed judge model grades the diagnosis against `ground_truth`.
+10. **Watch your own database (no LLM):** connect a Postgres database, scan it, choose tables, and the system learns what a normal day looks like and checks every new day, with weekday-aware baselines, an events calendar, and human feedback on alerts. See [Watch your own database](#watch-your-own-database).
 
 ## Architecture
 
@@ -87,6 +88,8 @@ docker compose down -v                   # wipe everything, including volumes
 
 The API docs are at http://localhost:8000/docs.
 
+**Ports already used?** Postgres (5432), Redis (6379) and the web page (3000) are published on your PC. If another project uses them, set `POSTGRES_PORT`, `REDIS_PORT` and `FRONTEND_PORT` in `.env` (for example 5433, 6380, 3001), and open `http://localhost:<FRONTEND_PORT>`. Inside Docker the services always talk on their normal ports.
+
 ### Optional: Gemini fallback
 
 Add to `.env` (free key from [Google AI Studio](https://aistudio.google.com/apikey)):
@@ -125,6 +128,33 @@ Every case costs real LLM tokens. Start with one or two faults.
 
 **Not available yet.** The harness is tested with scripted fake agents, but real runs so far were stopped by free-tier limits (see below). This section will hold the per-fault table once a real run completes.
 
+## Watch your own database
+
+The **Data sources** tab connects PipelineDoctor to a database and watches tables in it. This part uses no LLM, so it costs no tokens. Postgres only for now.
+
+**The flow**
+1. **Connect** with host, port, database, user and password. The password is stored encrypted. The tool reads the user's privileges and **warns if the user can write** (it never tries to write; its own sessions are always read-only). Use a SELECT-only user.
+2. **Scan** lists the tables, best candidates first (tables that keep receiving new rows).
+3. **Choose a table.** The time column and key column are suggested, and likely personal columns (email, name, phone...) are pre-ticked as **never read**.
+4. **Learn.** It reads the last 60 days, builds per-day numbers (row count, null rates, averages, duplicates, last row time), and needs 5 healthy days before it starts checking.
+5. **Check** the latest complete day with 7 checks: `schema_change`, `row_count_change`, `null_rate`, `value_distribution`, `duplicate_keys`, `lookalike_rows` (copies with different ids), `late_or_partial`. A failure opens an alert.
+
+**It understands normal rhythms**
+- **Same-weekday baseline:** a Saturday is compared with earlier Saturdays (when there are at least 3), so busy weekends do not cause false alarms and a drop on a busy day is not hidden.
+- **Events calendar:** mark a date range (a sale, a festival) with the expected change, for example "rows x3". During it, that table expects the change and the check says why ("expected x3 for Diwali sale"). Event days stay out of the normal baseline. "Any change is fine" and "all my tables" are options.
+- **Human feedback on alerts:** *Real problem* confirms it. *Normal, just this day* dismisses it and the day joins the baseline. *Normal, it is an event...* opens an event form pre-filled with the observed change, then re-checks the day.
+
+Try it with the demo shop database (no setup beyond one command):
+
+```bash
+docker compose exec api python -m scripts.make_demo_target                          # 56 normal days, busier weekends
+docker compose exec api python -m scripts.make_demo_target --anomaly sale_peak      # yesterday has 3x the orders
+```
+
+Other anomalies: `amount_x100`, `row_drop`, `mild_drop`, `null_spike`, `late_partial`, `duplicates`; add `--anomaly-days-ago 4` to damage an earlier day. In the UI: Data sources, **Fill in the demo database**, Connect, choose `public.sales`, then **Check now**.
+
+**Not done yet:** alerts on watched tables do not start the AI agents (that needs an LLM), checks run when you click rather than on a schedule, events do not repeat yearly, and MySQL is not supported.
+
 ## Project layout
 
 ```
@@ -136,6 +166,8 @@ app/
   agents/                         base loop, investigator, verifier, team (the loop), fixer
   fixes.py, memory.py             dry run / approve / reject, and pgvector incident memory
   evals.py                        eval harness, judge, report
+  targets.py, watch.py, vault.py  connect to a customer database, learn and check tables, encrypt passwords
+  api/watch.py                    endpoints for connections, watched tables, events and alert decisions
   celery_app.py, tasks.py, jobs.py   background jobs
   api/main.py                     FastAPI endpoints
 db/schema.sql                     all tables
@@ -154,4 +186,5 @@ scripts/                          setup, seed, run_pipeline, inject_fault, run_d
 - No real accuracy numbers yet; agent prompts have not been tuned against real model runs.
 - The SQL tool blocks `ground_truth` by text match; a separate database role with no grant would be stricter.
 - A retried investigation appends extra steps to the trace.
+- Watched-table checks use fixed minimum thresholds (25% for rows, 40% for averages) widened by how much a table normally varies; real tables will need tuning.
 - The UI is dark only and polls instead of streaming.

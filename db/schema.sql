@@ -1,6 +1,7 @@
 -- Core tables. Re-running this file resets them (DROP first), so setup is repeatable.
 -- Later steps append their own tables to this file.
 DROP TABLE IF EXISTS agent_steps CASCADE;
+DROP TABLE IF EXISTS watch_events CASCADE;
 DROP TABLE IF EXISTS watch_alerts CASCADE;
 DROP TABLE IF EXISTS watch_check_results CASCADE;
 DROP TABLE IF EXISTS table_profiles CASCADE;
@@ -193,6 +194,7 @@ CREATE TABLE watch_check_results (
 );
 
 -- Opened when a watched table fails a check for a day (the watching version of an incident).
+-- status: open -> confirmed (a human says it is a real problem) or dismissed (a human says it was normal)
 CREATE TABLE watch_alerts (
     alert_id    SERIAL PRIMARY KEY,
     watch_id    INT NOT NULL REFERENCES watched_tables(watch_id) ON DELETE CASCADE,
@@ -200,7 +202,21 @@ CREATE TABLE watch_alerts (
     status      TEXT NOT NULL DEFAULT 'open',
     summary     TEXT NOT NULL,
     created_at  TIMESTAMP NOT NULL DEFAULT now(),
+    decided_at  TIMESTAMP,
     UNIQUE (watch_id, day)
+);
+
+-- Known events that make a different day normal (a sale, a festival). Inside the dates, row counts and averages
+-- are expected to be factor x normal; a NULL factor means "any change is fine". watch_id NULL = every watched table.
+CREATE TABLE watch_events (
+    event_id      SERIAL PRIMARY KEY,
+    watch_id      INT REFERENCES watched_tables(watch_id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    start_day     DATE NOT NULL,
+    end_day       DATE NOT NULL,
+    row_factor    NUMERIC,
+    value_factor  NUMERIC,
+    created_at    TIMESTAMP NOT NULL DEFAULT now()
 );
 
 -- Every step any agent takes while working on an incident (the "flight recorder").

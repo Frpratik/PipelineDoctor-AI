@@ -40,6 +40,8 @@ def make_day(day, rng, anomaly=None):
     n = int(rng.gauss(200, 14) * (1.8 if day.weekday() >= 5 else 1.0))   # weekends are about 1.8x busier
     if anomaly == "row_drop":
         n = int(n * 0.35)
+    if anomaly == "sale_peak":   # three times the usual orders: a big sale (a real problem or a normal event?)
+        n = int(n * 3)
     if anomaly == "mild_drop":   # 40% fewer rows: on a busy day this still looks like a normal quiet day
         n = int(n * 0.6)
     seconds_limit = 9 * 3600 if anomaly == "late_partial" else 24 * 3600
@@ -62,7 +64,7 @@ def make_day(day, rng, anomaly=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--anomaly", choices=["amount_x100", "row_drop", "mild_drop", "null_spike", "late_partial", "duplicates"],
+    parser.add_argument("--anomaly", choices=["amount_x100", "row_drop", "mild_drop", "sale_peak", "null_spike", "late_partial", "duplicates"],
                         help="damage one day's data in a known way (default: yesterday)")
     parser.add_argument("--anomaly-days-ago", type=int, default=1, help="which day to damage: 1 = yesterday, 4 = four days ago ...")
     args = parser.parse_args()

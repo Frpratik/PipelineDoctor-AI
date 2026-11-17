@@ -1,5 +1,7 @@
 """Celery tasks for the slow work. Every task gets a job_id and keeps its row in the jobs table up to date."""
 
+from datetime import date
+
 import groq
 
 from app import jobs, trace, watch
@@ -98,12 +100,12 @@ def apply_fix_task(self, job_id: int, fix_id: int):
 
 
 @celery_app.task(bind=True)
-def run_watch_task(self, job_id: int, watch_id: int):
-    """Profile a watched table's recent days and check the latest one. No LLM involved."""
+def run_watch_task(self, job_id: int, watch_id: int, day: str = None):
+    """Profile a watched table's recent days and check one day (default yesterday). No LLM involved."""
     def work():
         table = watch.get_watch(watch_id)["table_name"]
         jobs.set_progress(job_id, f"Reading daily numbers from {table}")
-        result = watch.run_watch(watch_id)
+        result = watch.run_watch(watch_id, date.fromisoformat(day) if day else None)
         return f"{table} {result['day']}: {result['status']}, {result['message']}"
 
     run_job(self, job_id, work)
