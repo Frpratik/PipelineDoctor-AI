@@ -1,7 +1,7 @@
 """Create a pretend company database ("shop_demo") to connect PipelineDoctor to, plus a read-only user for it.
 
 Run from the project root:
-    python -m scripts.make_demo_target                       # 30 normal days
+    python -m scripts.make_demo_target                       # 56 normal days (weekends are busier)
     python -m scripts.make_demo_target --anomaly amount_x100 # yesterday's amounts are 100x too big
 Other anomalies: row_drop, null_spike, late_partial, duplicates.
 
@@ -19,7 +19,7 @@ from psycopg2.extras import execute_values
 from app import config
 
 DB, READER, READER_PASSWORD = "shop_demo", "demo_reader", "demo_reader_pw"
-DAYS = 30
+DAYS = 56   # 8 weeks, so every weekday has several earlier samples
 PRODUCTS = [("Wireless Mouse", 699), ("USB-C Cable", 299), ("Earbuds", 2499), ("Notebook Set", 199),
             ("Yoga Mat", 799), ("Water Bottle", 399), ("Mixer Grinder", 3499), ("Face Wash", 249)]
 FIRST_NAMES = ["Aarav", "Diya", "Rohan", "Isha", "Kavya", "Neha", "Vivaan", "Meera"]
@@ -37,9 +37,11 @@ CREATE TABLE audit_log (log_id SERIAL PRIMARY KEY, actor TEXT, action TEXT, logg
 
 def make_day(day, rng, anomaly=None):
     """One day of sales and matching payments and audit rows. `anomaly` damages the day in a known way."""
-    n = int(rng.gauss(200, 14))
+    n = int(rng.gauss(200, 14) * (1.8 if day.weekday() >= 5 else 1.0))   # weekends are about 1.8x busier
     if anomaly == "row_drop":
         n = int(n * 0.35)
+    if anomaly == "mild_drop":   # 40% fewer rows: on a busy day this still looks like a normal quiet day
+        n = int(n * 0.6)
     seconds_limit = 9 * 3600 if anomaly == "late_partial" else 24 * 3600
     sales, payments = [], []
     for i in range(n):
@@ -60,8 +62,9 @@ def make_day(day, rng, anomaly=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--anomaly", choices=["amount_x100", "row_drop", "null_spike", "late_partial", "duplicates"],
-                        help="damage yesterday's data in a known way")
+    parser.add_argument("--anomaly", choices=["amount_x100", "row_drop", "mild_drop", "null_spike", "late_partial", "duplicates"],
+                        help="damage one day's data in a known way (default: yesterday)")
+    parser.add_argument("--anomaly-days-ago", type=int, default=1, help="which day to damage: 1 = yesterday, 4 = four days ago ...")
     args = parser.parse_args()
     rng = random.Random(11)
 
@@ -83,10 +86,11 @@ if __name__ == "__main__":
                    [(rng.choice(FIRST_NAMES), f"customer{i}@example.com", rng.choice(CITIES), "2024-01-01") for i in range(300)])
     execute_values(cur, "INSERT INTO product_catalog (name, price) VALUES %s", PRODUCTS)
 
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    cur.execute("SELECT now()::date")   # the database's own "today", so day boundaries match what the checks see
+    today = datetime.combine(cur.fetchone()[0], datetime.min.time())
     for back in range(DAYS, 0, -1):   # DAYS days ago ... yesterday (today is left out: it is unfinished)
         day = today - timedelta(days=back)
-        sales, payments, audit = make_day(day, rng, args.anomaly if back == 1 else None)
+        sales, payments, audit = make_day(day, rng, args.anomaly if back == args.anomaly_days_ago else None)
         execute_values(cur, "INSERT INTO sales (customer_email, customer_name, product, quantity, amount, created_at) VALUES %s", sales)
         execute_values(cur, "INSERT INTO payments (method, status, paid_at) VALUES %s", payments)
         execute_values(cur, "INSERT INTO audit_log (actor, action, logged_at) VALUES %s", audit)
@@ -96,5 +100,5 @@ if __name__ == "__main__":
     cur.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {READER}")
     conn.commit()
     conn.close()
-    print(f"Created database {DB} with {DAYS} days of data" + (f", yesterday has anomaly '{args.anomaly}'" if args.anomaly else ""))
+    print(f"Created database {DB} with {DAYS} days of data" + (f", {args.anomaly_days_ago} day(s) ago has anomaly '{args.anomaly}'" if args.anomaly else ""))
     print(f"Connect as: user {READER} / password {READER_PASSWORD} (read-only), database {DB}, port {config.POSTGRES_PORT}")

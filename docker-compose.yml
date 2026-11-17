@@ -39,7 +39,7 @@ services:
     image: redis:7-alpine
     container_name: pd_redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"   # the port on your PC; set REDIS_PORT in .env if 6379 is taken
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -62,7 +62,7 @@ services:
     image: nginx:alpine
     container_name: pd_frontend
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"   # the port on your PC; set FRONTEND_PORT in .env if 3000 is taken
     volumes:
       - ./frontend/public:/usr/share/nginx/html:ro            # the page: edit and refresh, no rebuild
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro

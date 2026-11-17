@@ -10,8 +10,9 @@ from app import targets, vault
 from app.db import get_conn, query_df
 from app.targets import NUMERIC_TYPES, quote
 
-HISTORY_DAYS = 30          # how many past days we profile
+HISTORY_DAYS = 60          # how many past days we profile (8+ weeks, so each weekday has several samples)
 MIN_BASELINE_DAYS = 5      # fewer healthy days than this = still "learning", no alerts
+MIN_SAME_WEEKDAY = 3       # compare with the same weekday only if we have at least this many earlier ones
 MAX_METRIC_COLUMNS = 6     # numeric columns we track averages for (keeps the query small)
 
 # Thresholds. A tolerance is the bigger of a fixed minimum and 3x how much the table normally varies.
@@ -181,8 +182,9 @@ def _tolerance(minimum: float, values) -> float:
     return max(minimum, VARIATION_FACTOR * _variation(values))
 
 
-def generic_checks(watch: dict, today: dict, history: list, current_columns: list) -> list:
-    """Compare the latest day (`today`) with the healthy days before it. Pure function: no database access."""
+def generic_checks(watch: dict, today: dict, history: list, current_columns: list, basis: str = "recent days") -> list:
+    """Compare the checked day (`today`) with `history`, the earlier days chosen as its baseline (`basis` names them,
+    e.g. "Saturdays"). Pure function: no database access."""
     results = []
 
     def add(name, passed, details):
@@ -196,13 +198,13 @@ def generic_checks(watch: dict, today: dict, history: list, current_columns: lis
     counts = [h["row_count"] for h in history]
     usual = _median(counts)
     if today is None or today["row_count"] == 0:
-        add("row_count_change", False, f"no rows at all for the day (usual about {usual:.0f})")
+        add("row_count_change", False, f"no rows at all for the day (usual about {usual:.0f} on {basis})")
         return results
     if usual:
         tolerance = _tolerance(ROW_COUNT_TOLERANCE, counts)
         change = (today["row_count"] - usual) / usual
         add("row_count_change", abs(change) <= tolerance,
-            f"{today['row_count']} rows, usual about {usual:.0f} ({change:+.0%}, allowed +/-{tolerance:.0%})")
+            f"{today['row_count']} rows, usual about {usual:.0f} on {basis} ({change:+.0%}, allowed +/-{tolerance:.0%})")
 
     problems = []
     for column, now in today["columns"].items():
@@ -224,7 +226,8 @@ def generic_checks(watch: dict, today: dict, history: list, current_columns: lis
         if abs(ratio - 1) > tolerance:
             problems.append(f"{column} average {now['mean']:.4g} (usual {_median(base):.4g}, x{ratio:.2f}, allowed +/-{tolerance:.0%})")
         notes.append(column)
-    add("value_distribution", not problems, "; ".join(problems) if problems else f"averages normal for {', '.join(notes) or 'no numeric columns'}")
+    add("value_distribution", not problems,
+        "; ".join(problems) + f" (compared with {basis})" if problems else f"averages normal for {', '.join(notes) or 'no numeric columns'}")
 
     if watch["key_column"] and today["dup_rate"] is not None:
         add("duplicate_keys", today["dup_rate"] <= DUPLICATE_RATE,
@@ -254,40 +257,52 @@ def _current_columns(watch: dict) -> list:
         conn.close()
 
 
-def run_watch(watch_id: int) -> dict:
-    """Profile the table's recent history, then check the latest complete day and save the results."""
+def choose_baseline(history: list, target_day) -> tuple:
+    """Which earlier days is the target day compared with? The same weekday in earlier weeks, if we have enough of them.
+    Many tables have a weekly rhythm (busy weekends, quiet Mondays): comparing a Saturday with all days would
+    raise a false alarm every weekend, and comparing it with other Saturdays does not. Returns (days, label)."""
+    same_weekday = [h for h in history if h["day"].weekday() == target_day.weekday()]
+    if len(same_weekday) >= MIN_SAME_WEEKDAY:
+        return same_weekday, f"{target_day.strftime('%A')}s"
+    return history, "recent days"
+
+
+def run_watch(watch_id: int, day=None) -> dict:
+    """Profile the table's recent history, then check one complete day (default: yesterday) and save the results."""
     watch = get_watch(watch_id)
     yesterday = profile_table(watch)
+    target = day or yesterday
     profiles = query_df("SELECT day, metrics FROM table_profiles WHERE watch_id = %s ORDER BY day", (watch_id,))
     failed_days = set(query_df("SELECT DISTINCT day FROM watch_check_results WHERE watch_id = %s AND NOT passed", (watch_id,))["day"])
 
     by_day = dict(zip(profiles["day"], profiles["metrics"]))
-    today = by_day.get(yesterday)
-    # The baseline is healthy days before the checked day, so a bad day never becomes "normal".
-    history = [m for d, m in by_day.items() if d < yesterday and d not in failed_days][-HISTORY_DAYS:]
-    if len(history) < MIN_BASELINE_DAYS:
-        return {"day": str(yesterday), "status": "learning", "results": [], "alert_id": None,
-                "message": f"learning: {len(history)} of {MIN_BASELINE_DAYS} healthy days needed before checking"}
+    today = by_day.get(target)
+    # Healthy days before the checked day, so a bad day never becomes "normal".
+    healthy = [{**m, "day": d} for d, m in by_day.items() if d < target and d not in failed_days]
+    if len(healthy) < MIN_BASELINE_DAYS:
+        return {"day": str(target), "status": "learning", "results": [], "alert_id": None, "basis": None,
+                "message": f"learning: {len(healthy)} of {MIN_BASELINE_DAYS} healthy days needed before checking"}
+    history, basis = choose_baseline(healthy, target)
 
-    results = generic_checks(watch, today, history, _current_columns(watch))
+    results = generic_checks(watch, today, history, _current_columns(watch), basis)
     failed = [r["check_name"] for r in results if not r["passed"]]
 
     db = get_conn()
     cur = db.cursor()
-    cur.execute("DELETE FROM watch_check_results WHERE watch_id = %s AND day = %s", (watch_id, yesterday))
+    cur.execute("DELETE FROM watch_check_results WHERE watch_id = %s AND day = %s", (watch_id, target))
     for r in results:
         cur.execute("INSERT INTO watch_check_results (watch_id, day, check_name, passed, details) VALUES (%s, %s, %s, %s, %s)",
-                    (watch_id, yesterday, r["check_name"], r["passed"], r["details"]))
+                    (watch_id, target, r["check_name"], r["passed"], r["details"]))
     alert_id = None
     if failed:
-        summary = f"{watch['schema_name']}.{watch['table_name']} on {yesterday}: {len(failed)} check(s) failed: {', '.join(failed)}"
+        summary = f"{watch['schema_name']}.{watch['table_name']} on {target}: {len(failed)} check(s) failed: {', '.join(failed)}"
         cur.execute("INSERT INTO watch_alerts (watch_id, day, summary) VALUES (%s, %s, %s) "
                     "ON CONFLICT (watch_id, day) DO UPDATE SET summary = EXCLUDED.summary RETURNING alert_id",
-                    (watch_id, yesterday, summary))
+                    (watch_id, target, summary))
         alert_id = cur.fetchone()[0]
     else:   # the day is fine now (for example after fixing the data), so close any old alert for it
-        cur.execute("DELETE FROM watch_alerts WHERE watch_id = %s AND day = %s", (watch_id, yesterday))
+        cur.execute("DELETE FROM watch_alerts WHERE watch_id = %s AND day = %s", (watch_id, target))
     db.commit()
     db.close()
-    return {"day": str(yesterday), "status": "alert" if failed else "ok", "results": results, "alert_id": alert_id,
-            "message": f"{len(failed)} check(s) failed" if failed else "all checks passed"}
+    return {"day": str(target), "status": "alert" if failed else "ok", "results": results, "alert_id": alert_id,
+            "basis": basis, "message": f"{len(failed)} check(s) failed" if failed else "all checks passed"}
